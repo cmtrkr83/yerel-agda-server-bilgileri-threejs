@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KODM Altyapı Monitör — 192.168.41.252</title>
+<link rel="stylesheet" href="style.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="bg-grid"></div>
+<canvas id="scene"></canvas>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">◈</div>
+    <div>
+      <h1>KODM ALTYAPI MONİTÖR</h1>
+      <p>realtime server intelligence</p>
+    </div>
+  </div>
+  <div class="top-right">
+    <div class="live-badge"><span class="pulse"></span><span id="live-text">CANLI</span></div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- SÜTUN 1: 3D + hızlı durum -->
+  <section class="panel hero-panel">
+    <div class="panel-head">
+      <div>
+        <h2>SERVER NODE</h2>
+        <div class="ip-row">
+          <code id="ip-label">192.168.41.252</code>
+          <button id="btn-copy" title="IP kopyala">⧉</button>
+          <button id="btn-edit-ip" title="IP değiştir">✎</button>
+        </div>
+      </div>
+      <div id="status-pill" class="pill checking">KONTROL EDİLİYOR…</div>
+    </div>
+
+    <div id="viewport-wrap">
+      <div id="fps">60 fps</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat">
+        <label>PING / GECİKME</label>
+        <strong id="stat-ping">— ms</strong>
+        <span class="bar"><i id="bar-ping" style="width:0%"></i></span>
+      </div>
+      <div class="stat">
+        <label>UPTIME (OTURUM)</label>
+        <strong id="stat-uptime">—</strong>
+        <span class="bar"><i id="bar-up" style="width:100%"></i></span>
+      </div>
+      <div class="stat">
+        <label>BAŞARI ORANI</label>
+        <strong id="stat-success">%100</strong>
+        <span class="bar"><i id="bar-success" style="width:100%"></i></span>
+      </div>
+      <div class="stat">
+        <label>SON KONTROL</label>
+        <strong id="stat-last">—</strong>
+        <span class="sub" id="stat-mode">backend: gerçek ölçüm • 60sn aralık</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="btn-check" class="btn primary">⟳ Şimdi Kontrol Et</button>
+      <label class="switch-wrap">Otomatik <input type="checkbox" id="auto-check" checked><span class="switch"></span></label>
+    </div>
+  </section>
+
+  <!-- SÜTUN 2: grafik + port + sistem -->
+  <div class="col">
+    <section class="panel">
+      <div class="panel-title"><h3>⏱ GECİKME GRAFİĞİ</h3><span class="tag" id="ping-avg-tag">ort: —</span></div>
+      <canvas id="ping-chart" width="520" height="160"></canvas>
+      <div class="legend"><span><i class="dot green"></i>başarılı</span><span><i class="dot red"></i>zaman aşımı</span><span><i class="dot blue"></i>ortalama</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title"><h3>▣ PORT TARAMA</h3><button id="btn-scan" class="mini-btn">tara</button></div>
+      <div id="ports" class="ports"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title"><h3>◍ SERVER YÜKÜ</h3><span class="tag" id="sys-tag">SSH bekleniyor…</span></div>
+      <div class="meter"><div class="meter-head"><span>CPU</span><b id="cpu-val">%0</b></div><div class="meter-track"><div id="cpu-bar" class="meter-fill cpu"></div></div></div>
+      <div class="meter"><div class="meter-head"><span>RAM</span><b id="ram-val">%0</b></div><div class="meter-track"><div id="ram-bar" class="meter-fill ram"></div></div></div>
+      <div class="meter"><div class="meter-head"><span>DİSK</span><b id="disk-val">%0</b></div><div class="meter-track"><div id="disk-bar" class="meter-fill disk"></div></div></div>
+      <div class="meter"><div class="meter-head"><span>AĞ I/O</span><b id="net-val">0 Mb/s</b></div><div class="meter-track"><div id="net-bar" class="meter-fill net"></div></div></div>
+    </section>
+
+    <section class="panel console-panel grow">
+      <div class="panel-title"><h3>❯ OLAY KONSOLU</h3><button id="btn-clear" class="mini-btn">temizle</button></div>
+      <div id="log"></div>
+    </section>
+  </div>
+
+  <!-- SÜTUN 3: internet + konsol -->
+  <div class="col">
+    <section class="panel">
+      <div class="panel-title"><h3>🌐 İNTERNET / MODEM</h3><span id="net-pill" class="pill checking" style="font-size:10px;padding:6px 12px">…</span></div>
+      <div class="ports">
+        <div class="port" id="row-gw"><span>MODEM • 192.168.41.1</span><b id="net-gw">—</b></div>
+        <div class="port" id="row-g"><span>GOOGLE • 8.8.8.8</span><b id="net-g">—</b></div>
+        <div class="port" id="row-cf"><span>CLOUDFLARE • 1.1.1.1</span><b id="net-cf">—</b></div>
+      </div>
+      <div class="meter" style="margin-top:8px"><div class="meter-head"><span>DNS çözümleme</span><b id="dns-val">—</b></div></div>
+      <div class="meter"><div class="meter-head"><span>Hız (saatlik otomatik)</span><b id="speed-val">ilk ölçüm bekleniyor…</b></div><div class="meter-track"><div id="speed-bar" class="meter-fill net"></div></div></div>
+    </section>
+
+    <section class="panel grow">
+      <div class="panel-title"><h3>📡 AĞDAKİ CİHAZLAR</h3><span class="tag" id="dev-count">taranıyor…</span></div>
+      <div id="devices" class="dev-list"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <span><code>http://localhost:4000</code> • hedef <code>192.168.41.252</code> • modem <code>192.168.41.1</code> • dış IP <code id="wan-ip">…</code></span>
+  <span id="backend-status">backend: bekleniyor…</span>
+</footer>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

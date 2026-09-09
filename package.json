@@ -1,0 +1,16 @@
+{
+  "name": "nexus-server-monitor",
+  "version": "1.0.0",
+  "description": "Three.js server monitor — 192.168.41.119",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multicast-dns": "^7.2.5",
+    "ssh2": "^1.16.0"
+  }
+}
