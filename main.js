@@ -5,6 +5,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 let targetIp = '192.168.41.252';
 let autoMode = true;
 let lastDevTypes = {}; // ip -> wifi|lan|infra (3D iplik renkleri için)
+let lastDevNames = {}; // ip -> cihaz adı (3D iplik etiketleri için)
+let lastSmbUsers = {}; // ip -> SMB kullanıcı adı (3D iplik etiketleri için)
 let lastBootTs = null; // server2 son açılış (ajan)
 let prevFlows = new Set(); // bağlanan/ayrılan takibi için
 const PORTNAME = { 22: 'SSH/SFTP • dosya', 3000: 'APP', 80: 'HTTP', 443: 'HTTPS', 445: 'SMB • dosya', 139: 'SMB', 21: 'FTP', 3389: 'RDP' };
@@ -137,8 +139,25 @@ for (let k = 0; k < 3; k++) {
 // --- canlı bağlantı iplikleri (gerçek bağlı cihaz sayısı kadar) ---
 const MAX_CONN = 24;
 const TYPE_COLOR = { wifi: 0x4da6ff, lan: 0xffb224, infra: 0xff4d6d, unknown: 0x00e5ff };
+const TYPE_CSS = { wifi: '#4da6ff', lan: '#ffb224', infra: '#ff4d6d', unknown: '#00e5ff' };
 const connGroup = new THREE.Group(); scene.add(connGroup);
 const conns = [];
+function makeTextSprite(text, color) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgba(2,6,20,.80)';
+  x.beginPath();
+  if (x.roundRect) { x.roundRect(4, 18, 504, 92, 26); } else { x.rect(4, 18, 504, 92); }
+  x.fill();
+  x.strokeStyle = color; x.lineWidth = 5; x.stroke();
+  x.font = 'bold 44px "JetBrains Mono", monospace';
+  x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  const t = text.length > 20 ? text.slice(0, 19) + '…' : text;
+  x.fillText(t, 256, 66);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0, depthTest: false }));
+  sp.scale.set(2.3, 0.575, 1);
+  return sp;
+}
 function makeThread() {
   const g = new THREE.Group();
   const a = Math.random() * Math.PI * 2, r = 8 + Math.random() * 3.5;
@@ -155,7 +174,7 @@ function makeThread() {
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 })
   );
   g.add(line, dot); g.visible = false; connGroup.add(g);
-  return { g, line, dot, curve, t: Math.random(), speed: 0.25 + Math.random() * 0.5, targetOp: 0 };
+  return { g, line, dot, curve, label: null, labelText: '', t: Math.random(), speed: 0.25 + Math.random() * 0.5, targetOp: 0 };
 }
 for (let i = 0; i < MAX_CONN; i++) conns.push(makeThread());
 function setConnections(list) {
@@ -165,6 +184,16 @@ function setConnections(list) {
       const col = TYPE_COLOR[list[i].type] ?? 0x00e5ff;
       c.g.visible = true; c.targetOp = 0.55;
       c.line.material.color.setHex(col); c.dot.material.color.setHex(col);
+      const label = list[i].label || '';
+      if (label !== c.labelText) {
+        c.labelText = label;
+        if (c.label) { c.g.remove(c.label); c.label.material.map?.dispose(); c.label.material.dispose(); c.label = null; }
+        if (label) {
+          c.label = makeTextSprite(label, TYPE_CSS[list[i].type] ?? '#00e5ff');
+          c.label.position.copy(c.curve.getPoint(0.5)).add(new THREE.Vector3(0, 0.5, 0));
+          c.g.add(c.label);
+        }
+      }
     } else c.targetOp = 0;
   });
 }
@@ -219,6 +248,7 @@ function animate() {
     c.t = (c.t + c.speed * dt) % 1;
     c.dot.position.copy(c.curve.getPoint(c.t));
     c.dot.material.opacity = m.opacity + 0.35;
+    if (c.label) c.label.material.opacity = Math.min(1, m.opacity + 0.45);
     const s = 1 + Math.sin(t * 6 + c.t * 20) * 0.25;
     c.dot.scale.setScalar(s);
   }
@@ -298,7 +328,7 @@ async function runCheck(manual = false) {
   document.getElementById('stat-last').textContent = new Date().toLocaleTimeString('tr-TR');
   const flows = (backend.conns || []).map((c) => ({ ...c, svc: PORTNAME[c.port] || ('port ' + c.port) }));
   document.getElementById('stat-mode').textContent = `backend: gerçek ölçüm • ${flows.length} aktif bağlantı`;
-  try { setConnections(flows.map((c) => ({ type: lastDevTypes[c.ip] || 'unknown' }))); } catch { /* sahne hazır değilse geç */ }
+  try { setConnections(flows.map((c) => ({ type: lastDevTypes[c.ip] || 'unknown', label: lastSmbUsers[c.ip] || lastDevNames[c.ip] || c.ip }))); } catch { /* sahne hazır değilse geç */ }
   const cur = new Set(flows.map((c) => `${c.ip}:${c.port}`));
   for (const c of flows) { const k = `${c.ip}:${c.port}`; if (!prevFlows.has(k)) log(`🔗 ${c.ip} → :${c.port} (${c.svc})`, 'info'); }
   for (const k of prevFlows) { if (!cur.has(k)) log(`🔌 ${k} ayrıldı`, 'warn'); }
@@ -420,6 +450,22 @@ async function checkInternet() {
     setNetRow('row-cf', 'net-cf', d.cloudflare);
     document.getElementById('dns-val').textContent = `${d.dnsMs} ms`;
     if (d.publicIp) document.getElementById('wan-ip').textContent = d.publicIp;
+    document.getElementById('wan-use').textContent =
+      d.wanUse && d.wanUse.downMbps != null ? `↓ ${d.wanUse.downMbps} • ↑ ${d.wanUse.upMbps} Mb/s` : '—';
+    if (d.line) {
+      document.getElementById('line-val').textContent =
+        d.line.up === false ? `${d.line.tech} • KOPUK` : `${d.line.tech} • ${d.line.proto}`;
+      let wc = '—';
+      if (d.line.uptimeSec != null) {
+        const s = d.line.uptimeSec;
+        wc = `↑ ${Math.floor(s / 86400) > 0 ? Math.floor(s / 86400) + 'g ' : ''}${String(Math.floor(s / 3600) % 24).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`;
+      }
+      if (d.drops && d.drops.count > 0) {
+        const lt = new Date(d.drops.lastDrop).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        wc += ` • kopma: ${d.drops.count} (son ${lt})`;
+      } else if (d.drops) wc += ' • kopma yok';
+      document.getElementById('wan-conn').textContent = wc;
+    }
     const pill2 = document.getElementById('net-pill');
     pill2.className = 'pill ' + (d.internetUp ? 'online' : 'offline');
     pill2.textContent = d.internetUp ? '● İNTERNET VAR' : '● İNTERNET YOK';
@@ -457,13 +503,15 @@ async function checkDevices() {
     document.getElementById('devices').innerHTML = d.devices.map((x) => {
       const title = x.name || x.vendor || 'bilinmeyen cihaz';
       let sub = x.name && x.vendor ? x.vendor : x.mac;
+      if (x.rate != null && x.rate > 0) sub += ` • ⇄ ${x.rate} Mb/s`;
       if (smbByIp[x.ip]) sub += ` • 📁 ${smbByIp[x.ip]} oturum`;
       const cls = x.pingMs == null ? 'dead' : x.pingMs > 100 ? 'slow' : '';
       const tcls = (x.type === 'wifi' ? 'wifi' : x.type === 'infra' ? 'infra' : x.type === 'lan' ? 'lan' : '') + (x.apOnline === false ? ' off' : '');
       return `<div class="dev-row${tcls ? ' ' + tcls.trim() : ''}"><b>${esc(x.ip)}</b><span>${esc(x.conn)} • ${esc(title)} • ${esc(sub)}</span><i class="${cls}">${x.pingMs != null ? x.pingMs + ' ms' : '—'}</i></div>`;
     }).join('') || '<div class="dev-row"><b>—</b><span>cihaz bulunamadı</span><i></i></div>';
     lastDevTypes = {};
-    for (const x of d.devices) lastDevTypes[x.ip] = x.type || 'unknown';
+    lastDevNames = {};
+    for (const x of d.devices) { lastDevTypes[x.ip] = x.type || 'unknown'; lastDevNames[x.ip] = x.name || x.vendor || null; }
   } catch { /* sessiz geç */ }
 }
 
@@ -474,8 +522,13 @@ async function checkFileshares() {
     const r = await fetch('/api/fileshares', { cache: 'no-store' });
     if (!r.ok) return;
     const d = await r.json();
-    if (!d.agentOk) { lastSmb = null; return; }
+    if (!d.agentOk) { lastSmb = null; lastSmbUsers = {}; return; }
     lastSmb = d;
+    lastSmbUsers = {};
+    for (const s of d.sessions || []) {
+      const ip = s.ClientComputerName;
+      if (ip && !lastSmbUsers[ip]) lastSmbUsers[ip] = s.ClientUserName || ip;
+    }
     const cur = new Set();
     for (const s of d.sessions || []) {
       const ip = s.ClientComputerName || '?';

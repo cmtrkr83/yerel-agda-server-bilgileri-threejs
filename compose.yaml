@@ -1,0 +1,21 @@
+name: kodm-monitor
+
+services:
+  monitor:
+    build: .
+    image: kodm-monitor:latest
+    container_name: kodm-monitor
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    environment:
+      PORT: 4000
+    cap_add:
+      - NET_RAW # ping (ICMP) için gerekli
+    restart: unless-stopped
+
+    # NOT: ARP taraması ve mDNS/SSDP cihaz keşfi, container ile aynı LAN'ı
+    # görmeyi gerektirir. Linux bir hostta çalıştırıyorsan (örn. 192.168.41.119
+    # üzerindeki Portainer) aşağıdaki satırı açman önerilir:
+    # network_mode: host

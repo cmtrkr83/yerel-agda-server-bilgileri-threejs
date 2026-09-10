@@ -15,6 +15,7 @@ import { exec } from 'child_process';
 import { Client } from 'ssh2';
 import dgram from 'dgram';
 import mdns from 'multicast-dns';
+import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -177,11 +178,18 @@ async function publicIp() {
 
 app.get('/api/internet', async (req, res) => {
   const gw = (req.query.modem || process.env.MODEM_IP || '192.168.41.1').trim();
-  const [gateway, google, cloudflare, dnsMs, wan] = await Promise.all([
+  const [gateway, google, cloudflare, dnsMs, wanPub] = await Promise.all([
     pingStats(gw), pingStats('8.8.8.8'), pingStats('1.1.1.1'), dnsTime(), publicIp(),
   ]);
+  let wanUse = { downMbps: null, upMbps: null };
+  let line = { tech: 'VDSL', proto: 'PPPoE', up: null, uptimeSec: null };
+  let drops = { count: wanState.drops.length, lastDrop: null };
+  try {
+    const dd = await zyDal('Traffic_Status');
+    if (dd) { wanUse = zyWanRate(dd); line = getWanLine(dd); drops = trackDrops(line); }
+  } catch { /* modem kapalıysa geç */ }
   res.json({
-    backend: true, modem: gw, gateway, google, cloudflare, dnsMs, publicIp: wan,
+    backend: true, modem: gw, gateway, google, cloudflare, dnsMs, publicIp: wanPub, wanUse, line, drops,
     internetUp: google.reachable || cloudflare.reachable,
     at: new Date().toISOString(),
   });
@@ -328,6 +336,127 @@ async function apClients() {
   return Object.values(rows)
     .filter((x) => x.ip && x.ip !== '0.0.0.0')
     .map((x) => ({ ip: x.ip, mac: normMac(String(x.mac || '').replace(/-/g, ':')), apType: x.type || null, apOnline: x.online === '1', apName: x.name || null }));
+}
+
+// ---------- Modem (Zyxel) istemci listesi + anlık hızlar ----------
+const MODEM_IP = process.env.MODEM_IP || '192.168.41.1';
+const MODEM_USER = process.env.MODEM_USER || 'admin';
+const MODEM_PASS = process.env.MODEM_PASS || '';
+let zySess = null; // { sessionkey, cookie, aesKey }
+const zyPrevBytes = new Map(); // mac -> { rx, tx, t }
+let zyPrevWan = null; // { rx, tx, t } — WAN arayüz sayaçları
+
+let wanState = { drops: [], last: null };
+try { wanState = { drops: [], last: null, ...JSON.parse(fs.readFileSync(path.join(__dirname, 'wan-drops.json'), 'utf8')) }; } catch { /* ilk çalıştırma */ }
+function saveWan() { try { fs.writeFileSync(path.join(__dirname, 'wan-drops.json'), JSON.stringify(wanState)); } catch { /* yok say */ } }
+
+function getWanLine(dd) {
+  try {
+    const o = dd.Object[0];
+    const ppp = (o.pppIface || []).find((p) => p.X_ZYXEL_IfName === 'ppp1')
+      || (o.pppIface || []).find((p) => p.Status === 'Up');
+    if (!ppp) return { tech: 'VDSL', proto: 'PPPoE', up: false, uptimeSec: null };
+    return {
+      tech: 'VDSL', proto: 'PPPoE',
+      up: ppp.Status === 'Up' || ppp.ConnectionStatus === 'Connected',
+      uptimeSec: Number(ppp.LastChange) || null,
+    };
+  } catch { return { tech: 'VDSL', proto: 'PPPoE', up: null, uptimeSec: null }; }
+}
+
+function trackDrops(line) {
+  const prev = wanState.last;
+  if (prev && prev.up !== undefined && line.up) {
+    if (prev.up === false || (line.uptimeSec != null && prev.uptime != null && line.uptimeSec < prev.uptime)) {
+      wanState.drops.push({ at: new Date().toISOString() });
+      if (wanState.drops.length > 30) wanState.drops.shift();
+    }
+  }
+  wanState.last = { up: line.up, uptime: line.uptimeSec };
+  saveWan();
+  return { count: wanState.drops.length, lastDrop: wanState.drops.length ? wanState.drops[wanState.drops.length - 1].at : null };
+}
+
+function zyWanRate(d) {
+  try {
+    const o = d.Object[0];
+    const sum = (lst) => (lst || []).reduce((a, e) => ({ rx: a.rx + (Number(e.BytesReceived) || 0), tx: a.tx + (Number(e.BytesSent) || 0) }), { rx: 0, tx: 0 });
+    let t = sum(o.pppIfaceSt);
+    if (!t.rx && !t.tx) t = sum(o.ipIfaceSt);
+    const now = Date.now();
+    let wan = { downMbps: null, upMbps: null };
+    if (zyPrevWan && now > zyPrevWan.t) {
+      const dt = (now - zyPrevWan.t) / 1000;
+      if (dt > 0) {
+        const dd = Math.max(0, t.rx - zyPrevWan.rx), du = Math.max(0, t.tx - zyPrevWan.tx);
+        wan = { downMbps: Math.round((dd * 8 / dt / 1e6) * 10) / 10, upMbps: Math.round((du * 8 / dt / 1e6) * 10) / 10 };
+      }
+    }
+    zyPrevWan = { ...t, t: now };
+    return wan;
+  } catch { return { downMbps: null, upMbps: null }; }
+}
+
+async function zyLogin() {
+  if (!MODEM_PASS) return null;
+  try {
+    const { RSAPublicKey } = await (await fetch(`http://${MODEM_IP}/getRSAPublickKey`)).json();
+    if (!RSAPublicKey) return null;
+    const aesKey = crypto.randomBytes(32), ivFull = crypto.randomBytes(32);
+    const obj = { Input_Account: MODEM_USER, Input_Passwd: Buffer.from(MODEM_PASS).toString('base64'), currLang: 'en', RememberPassword: '', SHA512_password: false };
+    const c = crypto.createCipheriv('aes-256-cbc', aesKey, ivFull.slice(0, 16));
+    const content = Buffer.concat([c.update(JSON.stringify(obj), 'utf8'), c.final()]).toString('base64');
+    const key = crypto.publicEncrypt({ key: RSAPublicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from(aesKey.toString('base64'), 'utf8')).toString('base64');
+    const r = await fetch(`http://${MODEM_IP}/UserLogin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, key, iv: ivFull.toString('base64') }) });
+    const setCookie = r.headers.getSetCookie ? r.headers.getSetCookie().map((x) => x.split(';')[0]).join('; ') : '';
+    const lj = await r.json();
+    if (!lj.content) return null;
+    const dd = crypto.createDecipheriv('aes-256-cbc', aesKey, Buffer.from(lj.iv, 'base64').slice(0, 16));
+    const plain = JSON.parse(Buffer.concat([dd.update(lj.content, 'base64'), dd.final()]).toString('utf8'));
+    if (!plain.sessionkey) return null;
+    zySess = { sessionkey: plain.sessionkey, cookie: setCookie, aesKey };
+    return zySess;
+  } catch { return null; }
+}
+
+async function zyDal(oid) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!zySess && !(await zyLogin())) return null;
+    try {
+      const r = await fetch(`http://${MODEM_IP}/cgi-bin/DAL?oid=${oid}&DalGetOneObject=y`,
+        { headers: { CSRFToken: zySess.sessionkey, Cookie: zySess.cookie } });
+      const t = await r.text();
+      const j = JSON.parse(t.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+      if (j.content) {
+        const dd = crypto.createDecipheriv('aes-256-cbc', zySess.aesKey, Buffer.from(j.iv, 'base64').slice(0, 16));
+        return JSON.parse(Buffer.concat([dd.update(j.content, 'base64'), dd.final()]).toString('utf8'));
+      }
+      if (j.result && j.result !== 'ZCFG_SUCCESS') { zySess = null; continue; }
+      return j;
+    } catch { zySess = null; }
+  }
+  return null;
+}
+
+async function modemHosts() {
+  const d = await zyDal('Traffic_Status');
+  if (!d || !d.Object || !d.Object[0] || !Array.isArray(d.Object[0].hosts)) return [];
+  const now = Date.now();
+  return d.Object[0].hosts
+    .filter((h) => h.IPAddress && h.IPAddress.startsWith(SUBNET + '.'))
+    .map((h) => {
+      const mac = String(h.PhysAddress || '').toLowerCase();
+      const rx = Number(h.X_ZYXEL_BytesReceived) || 0, tx = Number(h.X_ZYXEL_BytesSent) || 0;
+      let rate = null;
+      const prev = zyPrevBytes.get(mac);
+      if (prev && now > prev.t) {
+        const dt = (now - prev.t) / 1000;
+        if (dt > 0) rate = Math.round((((rx - prev.rx) + (tx - prev.tx)) * 8 / dt / 1e6) * 10) / 10;
+        if (rate < 0) rate = 0;
+      }
+      zyPrevBytes.set(mac, { rx, tx, t: now });
+      return { ip: h.IPAddress, mac: normMac(mac), name: h.HostName || null, active: h.Active !== false, rate };
+    });
 }
 
 const ROUTER_RE = /zyxel|tp-?link|tenda|mercury|huawei|asus|keenetic|mikrotik|ubiquiti|d-?link|netgear|airties|totolink|cudy/i;
@@ -478,7 +607,7 @@ app.get('/api/devices', async (req, res) => {
   const modemIp = process.env.MODEM_IP || '192.168.41.1';
   // Linux komşu tablosu yalnızca hedefte SSH (22) açıksa okunur
   const ssh22 = await tcpPing(host, 22, 1500);
-  const [local, neigh, ap] = await Promise.all([localArp(), ssh22.open ? serverNeigh(host) : [], apClients()]);
+  const [local, neigh, ap, mh] = await Promise.all([localArp(), ssh22.open ? serverNeigh(host) : [], apClients(), modemHosts()]);
   const map = new Map();
   for (const d of [...local, ...neigh]) {
     if (!map.has(d.mac)) map.set(d.mac, { ...d });
@@ -489,6 +618,12 @@ app.get('/api/devices', async (req, res) => {
     const e = map.get(a.mac);
     e.apType = a.apType; e.apOnline = a.apOnline;
     if (a.apName && !e.name) e.name = a.apName;
+  }
+  for (const m of mh) {
+    if (!map.has(m.mac)) map.set(m.mac, { ip: m.ip, mac: m.mac, name: m.name });
+    const e = map.get(m.mac);
+    if (m.name && !e.name) e.name = m.name;
+    e.rate = m.rate;
   }
   const num = (ip) => ip.split('.').map(Number).reduce((x, y) => x * 256 + y);
   let devices = [...map.values()].filter((d) => d.ip.startsWith(SUBNET + '.')).sort((a, b) => num(a.ip) - num(b.ip));
@@ -510,6 +645,9 @@ app.get('/api/devices', async (req, res) => {
   res.json({
     backend: true, count: devices.length,
     wifi: devices.filter((d) => d.type === 'wifi').length, apOk: ap.length > 0,
+    top: devices.filter((d) => d.rate != null && d.rate > 0)
+      .sort((a, b) => b.rate - a.rate).slice(0, 5)
+      .map((d) => ({ ip: d.ip, name: d.name || d.vendor || null, rate: d.rate })),
     devices, at: new Date().toISOString(),
   });
 });
