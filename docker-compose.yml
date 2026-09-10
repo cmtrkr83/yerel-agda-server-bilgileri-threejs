@@ -15,6 +15,10 @@ services:
       PORT: 4000
     cap_add:
       - NET_RAW # ping (ICMP) için gerekli
+    volumes:
+      # Host'taki gizli env dosyası (şifreler git'e girmez, entrypoint okur).
+      # Hostta hazır: /home/baskan/kodm-monitor/.env (chmod 600)
+      - /home/baskan/kodm-monitor:/run/kodm-env:ro
     restart: unless-stopped
 
     # NOT: ARP taraması ve mDNS/SSDP cihaz keşfi, container ile aynı LAN'ı
