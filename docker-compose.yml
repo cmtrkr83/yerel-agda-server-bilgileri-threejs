@@ -8,7 +8,8 @@ services:
     ports:
       - "4000:4000"
     env_file:
-      - .env
+      - path: .env
+        required: false # Portainer/git kurulumunda .env olmayabilir; değişkenler arayüzden verilir
     environment:
       PORT: 4000
     cap_add:
