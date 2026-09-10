@@ -533,7 +533,7 @@ app.get('/api/status', async (req, res) => {
   const agentConns = ((agent && agent.conns) || []).map((c) => ({
     ip: String(c.ip || ''), port: Number(c.port) || 0,
     dir: Number(c.port) < 10000 ? 'in' : 'out', via: 'agent',
-  })).filter((c) => c.ip.startsWith(SUBNET + '.'));
+  })).filter((c) => c.ip.startsWith(SUBNET + '.') && c.port !== 9419); // 9419 = kendi ajan yoklamamız
   const seen = new Set(sshConns.map((c) => c.ip));
   const conns = [...sshConns, ...agentConns.filter((c) => !seen.has(c.ip))];
   res.json({
@@ -544,6 +544,9 @@ app.get('/api/status', async (req, res) => {
     ports,
     system, // ajan (Windows) veya SSH (Linux) kaynaklı; yoksa null
     systemSrc: (agent && agent.system) ? 'agent' : (sshSys ? 'ssh' : null),
+    drives: (agent && agent.drives) || null,
+    boot: (agent && agent.boot) || null,
+    ortakGB: (agent && agent.ortakGB) ?? null,
     conns, // hedefle o an aktif TCP konuşan LAN IP'leri (gerçek veri akışı)
     agentOk: Boolean(agent && agent.ok),
     sshConfigured: Boolean(process.env.SSH_USER && (process.env.SSH_PASS || process.env.SSH_KEY_PATH)),

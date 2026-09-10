@@ -32,6 +32,20 @@ while ($Listener.IsListening) {
       $os = Get-CimInstance Win32_OperatingSystem
       $cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
       $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+      $drives = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+        Select-Object DeviceID,
+          @{n='pct';e={[math]::Round((1 - $_.FreeSpace / $_.Size) * 100)}},
+          @{n='freeGB';e={[math]::Round($_.FreeSpace / 1GB, 1)}},
+          @{n='sizeGB';e={[math]::Round($_.Size / 1GB, 1)}})
+      $shares = @(Get-SmbShare | Where-Object { $_.Name -notmatch '\$$' } | Select-Object Name, Path)
+      $ortakPath = ($shares | Where-Object { $_.Name -eq 'ortak' }).Path
+      if (-not $script:ortakCacheT -or ((Get-Date) - $script:ortakCacheT).TotalMinutes -gt 30) {
+        $script:ortakGB = $null
+        if ($ortakPath -and (Test-Path $ortakPath)) {
+          $script:ortakGB = [math]::Round((Get-ChildItem $ortakPath -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1GB, 1)
+        }
+        $script:ortakCacheT = Get-Date
+      }
       $body = @{
         ok = $true
         host = $env:COMPUTERNAME
@@ -44,6 +58,10 @@ while ($Listener.IsListening) {
           ram = [math]::Round((1 - $os.FreePhysicalMemory / $os.TotalVisibleMemorySize) * 100)
           disk = [math]::Round((1 - $disk.FreeSpace / $disk.Size) * 100)
         }
+        drives = $drives
+        shares = $shares
+        ortakGB = $script:ortakGB
+        boot = $os.LastBootUpTime.ToString('o')
       } | ConvertTo-Json -Depth 4 -Compress
       $buf = [System.Text.Encoding]::UTF8.GetBytes($body)
       $ctx.Response.ContentType = 'application/json'

@@ -97,6 +97,10 @@ input:checked + .switch::after{left:18px}
 .dev-row.wifi{box-shadow:inset 3px 0 0 var(--blue)} .dev-row.wifi b{color:var(--blue)}
 .dev-row.lan{box-shadow:inset 3px 0 0 var(--amber)} .dev-row.lan b{color:var(--amber)}
 .dev-row.off{opacity:.5}
+.drive{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:5px}
+.drive b{color:var(--txt);min-width:22px}
+.drive .meter-track{flex:1;height:6px}
+.drive span:last-child{white-space:nowrap}
 #log{flex:1 1 auto;min-height:0;overflow:hidden;background:#020409;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:var(--mono);font-size:11px;line-height:1.65}
 #log .t{color:#4a5578;margin-right:8px}
 #log .ok{color:var(--green)} #log .err{color:var(--red)} #log .info{color:var(--blue)} #log .warn{color:var(--amber)}

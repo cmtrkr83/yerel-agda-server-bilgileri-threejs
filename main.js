@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 let targetIp = '192.168.41.252';
 let autoMode = true;
 let lastDevTypes = {}; // ip -> wifi|lan|infra (3D iplik renkleri için)
+let lastBootTs = null; // server2 son açılış (ajan)
 let prevFlows = new Set(); // bağlanan/ayrılan takibi için
 const PORTNAME = { 22: 'SSH/SFTP • dosya', 3000: 'APP', 80: 'HTTP', 443: 'HTTPS', 445: 'SMB • dosya', 139: 'SMB', 21: 'FTP', 3389: 'RDP' };
 let history = []; // {t, ping, ok}
@@ -310,10 +311,30 @@ async function runCheck(manual = false) {
   drawChart();
   log(`${ok ? '✓' : '✗'} ${targetIp} → ${ok ? ping + ' ms' : 'yanıt yok'}${manual ? ' (manuel)' : ''}`, ok ? 'ok' : 'err');
 
-  // uptime sayacı
-  const s = Math.floor((Date.now() - sessionStart) / 1000);
+  if (backend.boot) lastBootTs = new Date(backend.boot).getTime();
+  renderUptime();
+  if (backend.drives) renderDrives(backend.drives, backend.ortakGB);
+}
+
+function renderUptime() {
+  if (!lastBootTs) {
+    document.getElementById('stat-uptime').textContent = '—';
+    document.getElementById('stat-uptime-sub').textContent = 'ajan bekleniyor';
+    return;
+  }
+  const s = Math.floor((Date.now() - lastBootTs) / 1000);
+  const d = Math.floor(s / 86400);
   document.getElementById('stat-uptime').textContent =
-    `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    `${d > 0 ? d + 'g ' : ''}${String(Math.floor(s / 3600) % 24).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  document.getElementById('stat-uptime-sub').textContent = 'reboot: ' +
+    new Date(lastBootTs).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderDrives(drives, ortakGB) {
+  document.getElementById('drives').innerHTML = drives.map((x) =>
+    `<div class="drive"><b>${esc(x.DeviceID)}</b><div class="meter-track"><div class="meter-fill disk" style="width:${x.pct}%"></div></div><span>%${x.pct} • ${x.freeGB} GB boş</span></div>`
+  ).join('');
+  document.getElementById('ortak-val').textContent = ortakGB != null ? `${ortakGB} GB` : '—';
 }
 
 // --- grafik ---
@@ -486,11 +507,7 @@ document.getElementById('btn-edit-ip').onclick = () => {
     log(`Hedef değiştirildi → ${targetIp}`, 'warn'); runCheck(true);
   }
 };
-setInterval(() => {
-  const s = Math.floor((Date.now() - sessionStart) / 1000);
-  document.getElementById('stat-uptime').textContent =
-    `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-}, 1000);
+setInterval(() => renderUptime(), 1000);
 
 // başlat (sadece gerçek veri)
 log(`NEXUS başlatıldı. Hedef: ${targetIp}`, 'info');
