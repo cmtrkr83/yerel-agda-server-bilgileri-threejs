@@ -178,8 +178,21 @@ async function publicIp() {
 
 app.get('/api/internet', async (req, res) => {
   const gw = (req.query.modem || process.env.MODEM_IP || '192.168.41.1').trim();
-  const [gateway, google, cloudflare, dnsMs, wanPub] = await Promise.all([
-    pingStats(gw), pingStats('8.8.8.8'), pingStats('1.1.1.1'), dnsTime(), publicIp(),
+  const httpOk = async () => {
+    // ICMP kapalı container'larda yedek kontrol: HTTPS ile erişim
+    for (const u of ['https://www.google.com/generate_204', 'https://cp.cloudflare.com/']) {
+      try {
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch(u, { signal: ctrl.signal, redirect: 'manual' });
+        clearTimeout(to);
+        if (r.status < 500) return true;
+      } catch { /* dene sıradaki */ }
+    }
+    return false;
+  };
+  const [gateway, google, cloudflare, dnsMs, wanPub, http] = await Promise.all([
+    pingStats(gw), pingStats('8.8.8.8'), pingStats('1.1.1.1'), dnsTime(), publicIp(), httpOk(),
   ]);
   let wanUse = { downMbps: null, upMbps: null };
   let line = { tech: 'VDSL', proto: 'PPPoE', up: null, uptimeSec: null };
@@ -190,7 +203,8 @@ app.get('/api/internet', async (req, res) => {
   } catch { /* modem kapalıysa geç */ }
   res.json({
     backend: true, modem: gw, gateway, google, cloudflare, dnsMs, publicIp: wanPub, wanUse, line, drops,
-    internetUp: google.reachable || cloudflare.reachable,
+    httpOk: http,
+    internetUp: google.reachable || cloudflare.reachable || http,
     at: new Date().toISOString(),
   });
 });
