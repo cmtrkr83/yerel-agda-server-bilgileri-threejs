@@ -57,3 +57,24 @@ Test: `http://127.0.0.1:9419/smb`
 ## Ölçüm aralıkları
 
 Sunucu 60 sn • internet 15 sn • hız testi saatte 1 • cihaz taraması 60 sn • paylaşım oturumları 60 sn
+
+## Portainer / Docker ile çalıştırma
+
+`Dockerfile`, `compose.yaml`, `.env.example` hazır. Doğrulandı (imaj derleniyor, API cevap veriyor).
+
+```bash
+cp .env.example .env   # içini doldurun (şifreler!)
+docker compose up -d --build
+# aç: http://<host>:4000
+```
+
+**Portainer'da:** Stacks → Add stack → `compose.yaml` içeriğini yapıştırın →
+Environment variables bölümüne `.env` değerlerini girin → Deploy.
+
+**Önemli notlar:**
+- Ping için `cap_add: [NET_RAW]` compose'da hazır.
+- ARP taraması + mDNS/SSDP cihaz keşfi, container'ın LAN'ı görmesini gerektirir.
+  Linux bir hostta (örn. 192.168.41.119 üzerindeki Portainer) `network_mode: host`
+  satırını açın. Bridge modda ping/port/modem/AP çalışır; ARP tabanlı tarama sınırlı olur
+  (AP + modem listesinden cihazlar yine gelir).
+- Aynı LAN'daki bir hostta çalıştırın; modem/AP/server2 IP'leri `.env` ile ayarlanır.
