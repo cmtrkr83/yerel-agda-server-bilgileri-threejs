@@ -4,6 +4,7 @@ services:
   monitor:
     build: .
     image: kodm-monitor:latest
+    pull_policy: build # registry'den çekmeye çalışma, local'de derle (Portainer update hatasını önler)
     container_name: kodm-monitor
     ports:
       - "4000:4000"
